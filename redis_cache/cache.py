@@ -4,8 +4,8 @@ from math import ceil
 from django.core.cache.backends.base import BaseCache, InvalidCacheBackendError
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import importlib
+from django.utils.encoding import smart_unicode, smart_str
 from django.utils.datastructures import SortedDict
-from .compat import smart_text, smart_bytes, bytes_type, python_2_unicode_compatible
 
 try:
     import cPickle as pickle
@@ -22,7 +22,6 @@ from redis.connection import DefaultParser
 from redis_cache.sharder import CacheSharder
 
 
-@python_2_unicode_compatible
 class CacheKey(object):
     """
     A stub string class that we can use to check if a key was created already.
@@ -33,14 +32,8 @@ class CacheKey(object):
     def __eq__(self, other):
         return self._key == other
 
-    def __str__(self):
-        return smart_text(self._key)
-
-    def __repr__(self):
-        return repr(self._key)
-
-    def __hash__(self):
-        return hash(self._key)
+    def __unicode__(self):
+        return smart_str(self._key)
 
     __repr__ = __str__ = __unicode__
 
@@ -215,11 +208,7 @@ class RedisCache(BaseCache):
         """
         Unpickles the given value.
         """
-        value = smart_bytes(value)
-        try:
-            return self.serializer.loads(value)
-        except (TypeError, ValueError):
-            return pickle.loads(value)
+        return pickle.loads(value)
 
     def get_value(self, original):
         try:
@@ -258,9 +247,6 @@ class RedisCache(BaseCache):
 
         Returns ``True`` if the object was added, ``False`` if not.
         """
-        client = self.get_client(key)
-        if client.exists(self.make_key(key, version=version)):
-            return False
         return self.set(key, value, timeout, _add_only=True)
 
     def get(self, key, default=None, version=None):
@@ -301,11 +287,15 @@ class RedisCache(BaseCache):
         key = self.make_key(key, version=version)
         if timeout is None:
             timeout = self.default_timeout
-        # If ``value`` is not an int, then pickle it
-        if not isinstance(value, int) or isinstance(value, bool):
+        try:
+            value = float(value)
+            # If you lose precision from the typecast to str, then pickle value
+            if int(value) != value:
+                raise TypeError
+        except (ValueError, TypeError):
             result = self._set(key, self.serialize(value), int(timeout), client, _add_only)
         else:
-            result = self._set(key, value, int(timeout), client, _add_only)
+            result = self._set(key, int(value), int(timeout), client, _add_only)
         # result is a boolean
         return result
 
@@ -349,7 +339,7 @@ class RedisCache(BaseCache):
         if not keys:
             return {}
         recovered_data = SortedDict()
-        new_keys = list(map(lambda key: self.make_key(key, version=version), keys))
+        new_keys = map(lambda key: self.make_key(key, version=version), keys)
         map_keys = dict(zip(new_keys, keys))
         results = client.mget(new_keys)
         for key, value in zip(new_keys, results):
